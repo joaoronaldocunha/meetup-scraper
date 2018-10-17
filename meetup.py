@@ -14,10 +14,29 @@ class MeetupAPI:
 	def __init__(self, api_key=MEETUP_API):
 		self.api_key = api_key
 		self.groups = []
+		self.retries = 3
 
 	def _request_json(self, request):
 		url = "https://api.meetup.com{}&sign=true&key={}".format(request, self.api_key)
-		f = urllib.request.urlopen(url)
+		try:
+			f = urllib.request.urlopen(url)
+			self.retries = 3
+		except urllib.error.HTTPError as ex:
+			ratelimit_remaining = int(ex.getheader("X-RateLimit-Remaining"))
+			ratelimit_reset = int(ex.getheader("X-RateLimit-Reset"))
+
+			if (ratelimit_remaining == 0):
+				print("The limit of requests has been reached. waiting {} seconds for the reset".format(ratelimit_reset))
+				time.sleep(ratelimit_reset)
+
+			self.retries -= 1
+
+			if (self.retries > 0):
+				print("Trying request again")
+				return self._request_json(request)
+			else:
+				raise ex
+
 		str_response = f.read().decode('utf-8')
 		obj = json.loads(str_response)
 		return obj
@@ -74,24 +93,24 @@ def run_scraper(meetup, category, location, skip_before):
 
 	counter = 0
 	for x in meetup.groups:
-		# try:
-		counter += 1
-		print("{}: {} ({} members)".format(counter, x["name"], x["members"]))
-		events = meetup.get_events(x["id"], skip_before=(skip_before.timestamp()*1000))
-		total_attendees = 0
-		num_of_events = 0.001 # avoid divide by 0 error
+		try:
+			counter += 1
+			print("{}: {} ({} members)".format(counter, x["name"], x["members"]))
+			events = meetup.get_events(x["id"], skip_before=(skip_before.timestamp()*1000))
+			total_attendees = 0
+			num_of_events = 0.001 # avoid divide by 0 error
 
-		for event in events:
-			print(event)
-			total_attendees += int(event["yes_rsvp_count"])
-			num_of_events += 1
+			for event in events['results']:
+				print(event)
+				total_attendees += int(event['yes_rsvp_count'])
+				num_of_events += 1
 
-		f.writerow([x["id"], x["name"], x["category"]["shortname"], x["members"],
-		x["city"], x["country"], x["link"], total_count,
-		int(total_attendees/num_of_events),
-		time.strftime('%d/%m/%Y',  time.gmtime(x["created"]/1000.))])
-		# except Exception as e:
-		# 	print("Error: {}, skipping group".format(e))
+			f.writerow([x["id"], x["name"], x["category"]["shortname"], x["members"],
+			x["city"], x["country"], x["link"], total_attendees,
+			int(total_attendees/num_of_events),
+			time.strftime('%d/%m/%Y',  time.gmtime(x["created"]/1000.))])
+		except Exception as e:
+		 	print("Error: {}, skipping group".format(e))		
 
 	print("'{}' successfully saved".format(filename))
 
